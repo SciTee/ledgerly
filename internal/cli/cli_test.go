@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +21,49 @@ func runCLI(args ...string) (stdout string, err error) {
 
 func sampleFile() string {
 	return filepath.Join("testdata", "ing_sample.csv")
+}
+
+func writeTemp(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "in.csv")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestConvertDedupsAcrossFilesKeepsRepeatsWithinOneFile(t *testing.T) {
+	first := writeTemp(t, `Buchung;Valuta;Auftraggeber/Empfänger;Buchungstext;Verwendungszweck;Betrag;Währung
+06.02.2026;06.02.2026;SPOTIFY;Lastschrift;Premium Abo;-9,99;EUR
+06.02.2026;06.02.2026;Shell Station 4711;Lastschrift;Tanken;-62,30;EUR
+`)
+	// Re-exports the Spotify row twice (one overlap, one real repeat that only
+	// the longer window contains) plus one booking the first file lacks.
+	second := writeTemp(t, `Buchung;Valuta;Auftraggeber/Empfänger;Buchungstext;Verwendungszweck;Betrag;Währung
+06.02.2026;06.02.2026;SPOTIFY;Lastschrift;Premium Abo;-9,99;EUR
+06.02.2026;06.02.2026;SPOTIFY;Lastschrift;Premium Abo;-9,99;EUR
+07.02.2026;07.02.2026;ROSSMANN;Lastschrift;Drogerie;-12,45;EUR
+`)
+
+	out, err := runCLI("convert", "-p", "ING", first, second)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	// header + first file's 2 rows + the later file's surplus (one repeat) and
+	// its new row; only the re-exported overlap is dropped.
+	if len(lines) != 5 {
+		t.Fatalf("got %d lines, want 5:\n%s", len(lines), out)
+	}
+	spotify := 0
+	for _, l := range lines[1:] {
+		if strings.Contains(l, "SPOTIFY") {
+			spotify++
+		}
+	}
+	if spotify != 2 {
+		t.Errorf("spotify rows = %d, want 2 (both real occurrences kept)", spotify)
+	}
 }
 
 func TestConvertCSVEndToEnd(t *testing.T) {

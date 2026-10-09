@@ -29,7 +29,8 @@ type pipelineResult struct {
 }
 
 // run reads every input file with the chosen profile, merges them into one
-// timeline, removes duplicates and (unless disabled) categorizes the result.
+// timeline, removes rows re-exported across input files and (unless disabled)
+// categorizes the result.
 func runPipeline(inputs []string, opts pipelineOptions) (*pipelineResult, error) {
 	groups := make([][]model.Transaction, 0, len(inputs))
 	for _, in := range inputs {
@@ -40,8 +41,8 @@ func runPipeline(inputs []string, opts pipelineOptions) (*pipelineResult, error)
 		groups = append(groups, txs)
 	}
 
-	timeline := merge.Merge(groups...)
-	timeline, dups := merge.Dedup(timeline)
+	deduped, dups := merge.DedupFiles(groups...)
+	timeline := merge.Merge(deduped)
 
 	if !opts.noCategorize {
 		rs, err := loadRules(opts.rulesFile)

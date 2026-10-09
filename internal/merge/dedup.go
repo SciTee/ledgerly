@@ -7,22 +7,43 @@ import (
 	"github.com/SciTee/ledgerly/internal/model"
 )
 
-// Dedup removes duplicate transactions, keeping the first occurrence of each.
-// Two rows are considered the same when their booking date, amount, payee and
-// purpose match — the signature of a row that shows up twice because two
-// exports covered an overlapping period. It returns the deduplicated slice and
-// the number of rows dropped.
-func Dedup(txs []model.Transaction) (kept []model.Transaction, removed int) {
-	seen := make(map[string]struct{}, len(txs))
-	kept = make([]model.Transaction, 0, len(txs))
-	for _, tx := range txs {
-		k := dedupKey(tx)
-		if _, ok := seen[k]; ok {
-			removed++
-			continue
+// DedupFiles removes transactions that a later input file re-exports from an
+// earlier one, keeping every row within a single file. Two rows are considered
+// the same when their booking date, amount, payee and purpose match — the
+// signature of a row that shows up twice because two exports covered an
+// overlapping period. Files are processed in order and compared as multisets:
+// for each identity a later file keeps its surplus beyond what earlier files
+// already contributed, so a longer export whose window genuinely contains the
+// same real booking twice still lands once per real occurrence. Identical rows
+// inside one file are legitimate bookings (two same-day purchases, split
+// payments) and always survive. It returns the kept transactions in input
+// order and the number of rows dropped.
+func DedupFiles(groups ...[]model.Transaction) (kept []model.Transaction, removed int) {
+	prior := make(map[string]int)
+	kept = make([]model.Transaction, 0)
+	for _, g := range groups {
+		current := make(map[string]int, len(g))
+		for _, tx := range g {
+			current[dedupKey(tx)]++
 		}
-		seen[k] = struct{}{}
-		kept = append(kept, tx)
+		budget := make(map[string]int, len(current))
+		for k, n := range current {
+			if surplus := n - prior[k]; surplus > 0 {
+				budget[k] = surplus
+			}
+		}
+		for _, tx := range g {
+			k := dedupKey(tx)
+			if budget[k] > 0 {
+				budget[k]--
+				kept = append(kept, tx)
+				continue
+			}
+			removed++
+		}
+		for k, n := range current {
+			prior[k] += n
+		}
 	}
 	return kept, removed
 }
